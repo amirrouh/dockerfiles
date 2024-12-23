@@ -70,4 +70,6 @@ RUN wget http://www.dhondt.de/ccx_2.20.src.tar.bz2 && \
     sed -i 's|^FFLAGS = -Wall -O3 -fopenmp $(INCLUDES)|FFLAGS = -Wall -O3 -fopenmp -fallow-argument-mismatch $(INCLUDES)|' Makefile && \
     make
 
+ENV PATH="/root/calculix-adapter-master/bin:$PATH"
+
 CMD ["/bin/bash", "-c", "source /usr/lib/openfoam/openfoam2406/etc/bashrc && /bin/bash"]
