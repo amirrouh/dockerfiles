@@ -10,7 +10,8 @@ bash
 
 docker build -t paraview .
 ```
-
+```
+bash
 Then run the container:
 
 docker run -it -d -p 11111:11111 --name paraview_container paraview
