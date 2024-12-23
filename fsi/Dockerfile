@@ -13,6 +13,8 @@ RUN apt update && apt upgrade -y && apt install -y \
     python3-dev python3-pip libeigen3-dev libyaml-cpp-dev libboost-all-dev libxml2 \
     libxml2-dev libopenblas-dev liblapack-dev libarpack2-dev libspooles-dev git
 
+RUN apt install tmux -y
+
 # Install PETSc
 RUN pip3 install numpy && \
     wget http://ftp.mcs.anl.gov/pub/petsc/release-snapshots/petsc-3.16.0.tar.gz && \
