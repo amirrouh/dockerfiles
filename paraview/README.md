@@ -6,12 +6,9 @@ your local paraview (should have the same version).
 ## Build the image
 In the paraview folder, run the follwing command:
 ```bash
-
 docker build -t paraview .
 ```
+Then run the following code to create the container
 ```bash
-Then run the container:
-
 docker run -it -d -p 11111:11111 --name paraview_container paraview
-
 ```
