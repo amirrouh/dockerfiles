@@ -72,6 +72,12 @@ RUN wget http://www.dhondt.de/ccx_2.20.src.tar.bz2 && \
     sed -i 's|^FFLAGS = -Wall -O3 -fopenmp $(INCLUDES)|FFLAGS = -Wall -O3 -fopenmp -fallow-argument-mismatch $(INCLUDES)|' Makefile && \
     make
 
+# Install CalculiX-ccx to convert CalculiX fdr results to vtk which is readable by paraview
+RUN apt update -y &&\
+	apt install libxrender1 libxext6 libgl1-mesa-glx libglx-mesa0 -y &&\	
+    pip install ccx2paraview vtk
+
+
 ENV PATH="/root/calculix-adapter-master/bin:$PATH"
 
 CMD ["/bin/bash", "-c", "source /usr/lib/openfoam/openfoam2406/etc/bashrc && /bin/bash"]
