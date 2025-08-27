@@ -15,10 +15,11 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Container definitions - easily extensible
+# Format: "image:tag|directory|description|size|container_patterns|start_command|port"
 declare -A CONTAINERS=(
-    ["fsi"]="fsi:latest|fsi|FSI Container (OpenFOAM + CalculiX + preCICE)|5.2GB"
-    ["paraview"]="paraview:latest|paraview|ParaView Visualization Server|2.6GB"
-    ["pytorch"]="pytorch_jupyter:latest|pytorch_jupyter|PyTorch Jupyter Environment|7.9GB"
+    ["fsi"]="fsi:latest|fsi|FSI Container (OpenFOAM + CalculiX + preCICE)|5.2GB|fsi-*|interactive|"
+    ["paraview"]="paraview:latest|paraview|ParaView Visualization Server|2.6GB|paraview-server|daemon|11111"
+    ["pytorch"]="pytorch_jupyter:latest|pytorch_jupyter|PyTorch Jupyter Environment|7.9GB|pytorch-jupyter|daemon|8989"
 )
 
 # Function to print colored output
@@ -62,6 +63,9 @@ get_container_info() {
         "dir") echo "$(echo "$info" | cut -d'|' -f2)" ;;
         "desc") echo "$(echo "$info" | cut -d'|' -f3)" ;;
         "size") echo "$(echo "$info" | cut -d'|' -f4)" ;;
+        "patterns") echo "$(echo "$info" | cut -d'|' -f5)" ;;
+        "type") echo "$(echo "$info" | cut -d'|' -f6)" ;;
+        "port") echo "$(echo "$info" | cut -d'|' -f7)" ;;
         *) echo "$info" ;;
     esac
 }
@@ -193,9 +197,20 @@ show_status() {
             built="Yes"
         fi
         
-        # Check common container names
-        if is_container_running "${container_key}-server" || is_container_running "$container_key" || is_container_running "${container_key}_jupyter"; then
-            running="Yes"
+        # Check if container is running using patterns
+        local container_patterns=$(get_container_info "$container_key" "patterns")
+        local container_type=$(get_container_info "$container_key" "type")
+        
+        if [[ "$container_type" == "daemon" ]]; then
+            # For daemon containers, check the specific named container
+            if is_container_running "$container_patterns"; then
+                running="Yes"
+            fi
+        else
+            # For interactive containers, check for any matching pattern
+            if docker ps --format "{{.Names}}" | grep -q "^${container_key}-[0-9]*$"; then
+                running="Yes"
+            fi
         fi
         
         printf "%-12s %-8s %-8s %-50s\n" "$container_key" "$built" "$running" "$description ($size)"
@@ -218,7 +233,7 @@ show_usage() {
     echo "  restart <container>      - Restart container service"
     echo "  update <container|all>   - Update/rebuild container(s)"
     echo "  repair <container|all>   - Repair/rebuild container(s)"
-    echo "  remove <container|all>   - Remove container image(s)"
+    echo "  remove <container|all>   - Remove only container and its image"
     echo "  logs <container>         - Show container logs"
     echo "  shell <container>        - Open interactive shell"
     echo "  info                     - Show system information"
@@ -300,72 +315,66 @@ install_containers() {
     fi
 }
 
-# Start container service
+# Start container service - generalized
 start_container() {
     local container_key=$1
     local image_name=$(get_container_info "$container_key" "image")
+    local container_patterns=$(get_container_info "$container_key" "patterns")
+    local container_type=$(get_container_info "$container_key" "type")
+    local port=$(get_container_info "$container_key" "port")
     
     if ! image_exists "$image_name"; then
         print_error "Container $container_key not installed. Run: $0 install $container_key"
         exit 1
     fi
     
-    case $container_key in
-        "paraview")
-            if is_container_running "paraview-server"; then
-                print_warning "ParaView server is already running"
+    if [[ "$container_type" == "daemon" ]]; then
+        # For daemon containers, use the pattern as the container name
+        local container_name="$container_patterns"
+        if is_container_running "$container_name"; then
+            print_warning "$container_key server is already running"
+        else
+            if [[ -n "$port" ]]; then
+                docker run -d --name "$container_name" -p "$port:$port" "$image_name"
+                print_success "$container_key server started on port $port"
+                if [[ "$container_key" == "pytorch" ]]; then
+                    print_status "Access at: http://localhost:$port"
+                fi
             else
-                docker run -d --name paraview-server -p 11111:11111 "$image_name"
-                print_success "ParaView server started on port 11111"
+                docker run -d --name "$container_name" "$image_name"
+                print_success "$container_key server started"
             fi
-            ;;
-        "pytorch")
-            if is_container_running "pytorch-jupyter"; then
-                print_warning "PyTorch Jupyter is already running"
-            else
-                docker run -d --name pytorch-jupyter -p 8989:8989 "$image_name"
-                print_success "PyTorch Jupyter started on port 8989"
-                print_status "Access at: http://localhost:8989"
-            fi
-            ;;
-        "fsi")
-            print_status "Starting interactive FSI session..."
-            docker run -it --name "fsi-$(date +%s)" "$image_name"
-            ;;
-        *)
-            print_error "Unknown container: $container_key"
-            ;;
-    esac
+        fi
+    else
+        # For interactive containers, create with timestamp
+        print_status "Starting interactive $container_key session..."
+        local container_name="${container_key}-$(date +%s)"
+        docker run -it --name "$container_name" "$image_name"
+    fi
 }
 
-# Stop container service
+# Stop container service - generalized
 stop_container() {
     local container_key=$1
+    local container_patterns=$(get_container_info "$container_key" "patterns")
+    local container_type=$(get_container_info "$container_key" "type")
     
-    case $container_key in
-        "paraview")
-            if is_container_running "paraview-server"; then
-                docker stop paraview-server && docker rm paraview-server
-                print_success "ParaView server stopped"
-            else
-                print_warning "ParaView server is not running"
-            fi
-            ;;
-        "pytorch")
-            if is_container_running "pytorch-jupyter"; then
-                docker stop pytorch-jupyter && docker rm pytorch-jupyter
-                print_success "PyTorch Jupyter stopped"
-            else
-                print_warning "PyTorch Jupyter is not running"
-            fi
-            ;;
-        *)
-            print_error "Cannot stop $container_key (interactive container)"
-            ;;
-    esac
+    if [[ "$container_type" == "daemon" ]]; then
+        # For daemon containers, stop the named container
+        local container_name="$container_patterns"
+        if is_container_running "$container_name"; then
+            docker stop "$container_name" && docker rm "$container_name"
+            print_success "$container_key server stopped"
+        else
+            print_warning "$container_key server is not running"
+        fi
+    else
+        print_error "Cannot stop $container_key (interactive container type)"
+        print_status "Interactive containers exit automatically when the session ends"
+    fi
 }
 
-# Remove container images
+# Remove only the specific containers and image created by this script - generalized
 remove_containers() {
     local containers_to_remove=()
     
@@ -380,35 +389,106 @@ remove_containers() {
     fi
     
     echo
-    print_warning "This will remove the following container images:"
-    for container_key in "${containers_to_remove[@]}"; do
-        local image_name=$(get_container_info "$container_key" "image")
-        if image_exists "$image_name"; then
-            echo "  - $image_name"
-        fi
-    done
+    print_warning "This will remove ONLY the specific containers and images created by this script:"
     echo
     
-    read -p "Continue with removal? (y/N): " -n 1 -r
+    # Show exactly what will be removed
+    for container_key in "${containers_to_remove[@]}"; do
+        local image_name=$(get_container_info "$container_key" "image")
+        local description=$(get_container_info "$container_key" "desc")
+        local container_patterns=$(get_container_info "$container_key" "patterns")
+        local container_type=$(get_container_info "$container_key" "type")
+        
+        echo "  - $container_key: $description"
+        
+        # Show specific containers that will be removed based on patterns
+        if [[ "$container_type" == "daemon" ]]; then
+            # For daemon containers, check the specific named container
+            if docker ps -a --format "{{.Names}}" | grep -q "^${container_patterns}$"; then
+                echo "    Container: $container_patterns"
+            fi
+        else
+            # For interactive containers, find all matching pattern containers
+            local matching_containers=$(docker ps -a --format "{{.Names}}" | grep "^${container_key}-[0-9]*$" || true)
+            if [[ -n "$matching_containers" ]]; then
+                echo "    Containers: $matching_containers"
+            fi
+        fi
+        
+        if image_exists "$image_name"; then
+            echo "    Image: $image_name"
+        fi
+    done
+    
+    echo
+    print_status "Note: Only containers created by this script will be removed."
+    print_status "NO volumes, networks, or other Docker resources will be touched."
+    echo
+    
+    read -p "Continue with targeted removal? (y/N): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         print_status "Removal cancelled"
         exit 0
     fi
     
+    local total_removed=0
+    
     for container_key in "${containers_to_remove[@]}"; do
         local image_name=$(get_container_info "$container_key" "image")
+        local container_patterns=$(get_container_info "$container_key" "patterns")
+        local container_type=$(get_container_info "$container_key" "type")
         
-        # Stop running containers first
-        stop_container "$container_key" 2>/dev/null || true
+        print_status "Removing resources for $container_key..."
         
-        if image_exists "$image_name"; then
-            docker rmi "$image_name"
-            print_success "Removed $image_name"
+        # Remove containers based on type and patterns
+        if [[ "$container_type" == "daemon" ]]; then
+            # For daemon containers, remove the specific named container
+            if docker ps -a --format "{{.Names}}" | grep -q "^${container_patterns}$"; then
+                print_status "  Removing container: $container_patterns"
+                docker stop "$container_patterns" 2>/dev/null || true
+                docker rm "$container_patterns" 2>/dev/null || true
+                ((total_removed++))
+            fi
         else
-            print_warning "$image_name not found"
+            # For interactive containers, remove all matching pattern containers
+            local matching_containers=$(docker ps -a --format "{{.Names}}" | grep "^${container_key}-[0-9]*$" || true)
+            if [[ -n "$matching_containers" ]]; then
+                echo "$matching_containers" | while read -r container_name; do
+                    if [[ -n "$container_name" ]]; then
+                        print_status "  Removing container: $container_name"
+                        docker stop "$container_name" 2>/dev/null || true
+                        docker rm "$container_name" 2>/dev/null || true
+                    fi
+                done
+                total_removed=$((total_removed + $(echo "$matching_containers" | wc -l)))
+            fi
         fi
+        
+        # Remove only the specific image we built
+        if image_exists "$image_name"; then
+            print_status "  Removing image: $image_name"
+            if docker rmi "$image_name" 2>/dev/null; then
+                print_success "  ✓ Image removed: $image_name"
+                ((total_removed++))
+            else
+                print_error "  ✗ Could not remove image: $image_name (may be in use)"
+            fi
+        else
+            print_warning "  Image $image_name not found"
+        fi
+        
+        echo
     done
+    
+    echo
+    print_header "Removal Summary"
+    if [[ $total_removed -gt 0 ]]; then
+        print_success "Successfully removed $total_removed resource(s) for ${#containers_to_remove[@]} container(s)"
+        print_status "Only targeted container resources were removed - no system cleanup performed"
+    else
+        print_warning "No resources found to remove"
+    fi
 }
 
 # Main execution
@@ -476,7 +556,7 @@ main() {
             print_status "Rebuilding container(s)..."
             install_containers "$container"
             ;;
-        "remove")
+        "remove"|"uninstall"|"delete")
             if [[ -z "$container" ]]; then
                 print_error "Please specify container or 'all'"
                 exit 1
@@ -488,11 +568,15 @@ main() {
                 print_error "Please specify container"
                 exit 1
             fi
-            case $container in
-                "paraview") docker logs paraview-server 2>/dev/null || print_error "ParaView server not running" ;;
-                "pytorch") docker logs pytorch-jupyter 2>/dev/null || print_error "PyTorch Jupyter not running" ;;
-                *) print_error "No persistent logs for $container" ;;
-            esac
+            local container_patterns=$(get_container_info "$container" "patterns")
+            local container_type=$(get_container_info "$container" "type")
+            
+            if [[ "$container_type" == "daemon" ]]; then
+                docker logs "$container_patterns" 2>/dev/null || print_error "$container server not running"
+            else
+                print_error "No persistent logs for $container (interactive container type)"
+                print_status "Interactive containers don't maintain persistent logs"
+            fi
             ;;
         "shell")
             if [[ -z "$container" ]]; then

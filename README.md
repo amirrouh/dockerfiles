@@ -275,44 +275,90 @@ docker run -p 11112:11111 paraview:latest
 
 ## ➕ Adding New Containers
 
-The container manager is designed to be easily extensible. To add a new container:
+The container manager is **fully generalized** and extensible. Adding a new container requires **NO CODE CHANGES** - just configuration!
 
 ### Step 1: Add Container Definition
 Edit `setup.sh` and add your container to the `CONTAINERS` associative array:
 
 ```bash
-# In setup.sh, around line 18-22
+# In setup.sh, around line 19-23
 declare -A CONTAINERS=(
-    ["fsi"]="fsi:latest|fsi|FSI Container (OpenFOAM + CalculiX + preCICE)|5.2GB"
-    ["paraview"]="paraview:latest|paraview|ParaView Visualization Server|2.6GB"
-    ["pytorch"]="pytorch_jupyter:latest|pytorch_jupyter|PyTorch Jupyter Environment|7.9GB"
-    ["mynew"]="mynew:latest|mynew|My New Container Description|2.0GB"  # Add this line
+    ["fsi"]="fsi:latest|fsi|FSI Container (OpenFOAM + CalculiX + preCICE)|5.2GB|fsi-*|interactive|"
+    ["paraview"]="paraview:latest|paraview|ParaView Visualization Server|2.6GB|paraview-server|daemon|11111"
+    ["pytorch"]="pytorch_jupyter:latest|pytorch_jupyter|PyTorch Jupyter Environment|7.9GB|pytorch-jupyter|daemon|8989"
+    ["mynew"]="mynew:latest|mynew|My New Container Description|2.0GB|mynew-server|daemon|8080"  # Add this line
 )
 ```
 
-The format is: `"key"="image:tag|directory|description|size"`
+**Format**: `"key"="image:tag|directory|description|size|container_patterns|type|port"`
+
+**Field Descriptions:**
+- `key`: Container identifier used in commands
+- `image:tag`: Docker image name and tag  
+- `directory`: Directory containing Dockerfile
+- `description`: Human-readable description
+- `size`: Estimated size for display
+- `container_patterns`: Container naming pattern (`*` for timestamp suffix)
+- `type`: `daemon` (persistent service) or `interactive` (temporary session)
+- `port`: Port for daemon containers (empty for interactive)
 
 ### Step 2: Create Container Directory
-Create a directory with the same name as specified in the definition:
 ```bash
 mkdir mynew
 cd mynew
 # Add your Dockerfile here
 ```
 
-### Step 3: Add Container-Specific Logic (Optional)
-If your container needs special handling (custom start/stop/test logic), add it to the respective functions:
-
-- **Custom testing**: Add case in `test_container_functionality()` function
-- **Custom start/stop**: Add cases in `start_container()` and `stop_container()` functions
-- **Custom logs**: Add case in the logs command handler
-
-### Step 4: Test Your Addition
+### Step 3: Test Your Addition (Automatic)
 ```bash
-./setup.sh install mynew
-./setup.sh test mynew
-./setup.sh status
+./setup.sh install mynew    # Builds and tests automatically
+./setup.sh start mynew      # Starts based on type (daemon/interactive)
+./setup.sh stop mynew       # Stops daemon containers
+./setup.sh remove mynew     # Removes containers and image
+./setup.sh status           # Shows all containers including new one
 ```
+
+### Container Type Examples
+
+**Daemon Container** (persistent service):
+```bash
+["nginx"]="nginx:latest|nginx|Web Server|200MB|nginx-server|daemon|8080"
+```
+- Creates container named `nginx-server`
+- Runs as background service on port 8080
+- Can be started/stopped/restarted
+- Has persistent logs
+
+**Interactive Container** (temporary session):
+```bash
+["shell"]="ubuntu:latest|shell|Ubuntu Shell|100MB|shell-*|interactive|"
+```  
+- Creates containers named `shell-1234567890` (with timestamp)
+- Runs interactively then exits
+- Cannot be stopped (exits when session ends)
+- No persistent logs
+
+### Step 4: Optional - Custom Testing
+If you need special test logic, add a case to `test_container_functionality()`:
+
+```bash
+        "mynew")
+            if docker run --rm "$image_name" your-test-command; then
+                print_success "✓ MyNew functionality"
+            else
+                print_warning "✗ MyNew test failed"
+                return 1
+            fi
+            ;;
+```
+
+**That's it!** The system automatically handles:
+- ✅ Installation and building
+- ✅ Starting/stopping based on type
+- ✅ Status monitoring 
+- ✅ Container removal with patterns
+- ✅ Logs viewing (for daemon types)
+- ✅ Help and command listings
 
 ## 📁 Directory Structure
 
